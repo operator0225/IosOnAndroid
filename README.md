@@ -48,15 +48,19 @@ A layered translation stack:
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design and
 [docs/ROADMAP.md](docs/ROADMAP.md) for the phased build plan. Status:
-**Phase 2 — dynamic linking & threading**, with Phase 1 mostly but not
-fully done. Implemented and unit tested (`cargo test --workspace`, 34
-tests): the Mach-O parser (segments, entry point, symbol table, dylib
-names), Darwin→Linux syscall translation, dyld-style symbol resolution
-against a shim registry, and a futex-backed mutex. **Not yet verified on
-real hardware**: the aarch64 ptrace guest-interception loop builds clean
-for `aarch64-linux-android` but this development environment is x86_64
-with no ARM64 execution available — see
-[docs/ROADMAP.md](docs/ROADMAP.md) for the honest per-item status.
+**Phase 3 — Objective-C runtime & minimal libSystem**, with Phases 1-2
+mostly but not fully done. Implemented and unit tested
+(`cargo test --workspace`, 50 tests): the Mach-O parser (segments, entry
+point, symbol table, dylib names), Darwin→Linux syscall translation,
+dyld-style symbol resolution against a shim registry, a futex-backed
+mutex, an Objective-C class/method/ivar/dispatch model (including
+correct nil-messaging semantics), ARC retain/release bookkeeping, and a
+four-function `libSystem` subset over bionic. **Not yet verified on real
+hardware**: the aarch64 ptrace guest-interception loop and the real
+ARM64 `objc_msgSend` calling-convention trampoline both build clean for
+`aarch64-linux-android` but this development environment is x86_64 with
+no ARM64 execution available — see [docs/ROADMAP.md](docs/ROADMAP.md)
+for the honest per-item status.
 
 ## Building
 

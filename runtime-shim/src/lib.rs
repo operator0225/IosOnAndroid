@@ -1,17 +1,20 @@
-//! dyld-compatible symbol resolution, and Darwin threading-primitive
-//! shims backed by real Linux/Android primitives underneath.
+//! dyld-compatible symbol resolution, a clean-room Objective-C
+//! object/dispatch model, ARC refcounting, and a minimal `libSystem`
+//! subset, all backed by real Linux/Android primitives underneath.
 //!
-//! See `../docs/ARCHITECTURE.md` §3 for how this fits the overall stack.
-//! The Objective-C runtime and `libSystem` C-library subset described
-//! there are not implemented yet — this crate currently covers only the
-//! two pieces of Phase 2 that are self-contained enough to build and test
-//! honestly right now: symbol resolution (`registry`) and a futex mutex
-//! (`sync`). See `../docs/ROADMAP.md` Phase 2 for what's still open
-//! (Mach IPC/ports, the full `bsdthread_create`-style thread-creation
-//! path, ARC).
+//! See `../docs/ARCHITECTURE.md` §3 for how this fits the overall stack,
+//! and `../docs/ROADMAP.md` Phase 2/3 for exactly what's implemented vs.
+//! still open (real ARM64 `objc_msgSend` invocation, parsing classes out
+//! of a Mach-O's `__objc_classlist`, Mach IPC/ports, real Darwin thread
+//! creation).
 
+pub mod arc;
+pub mod libsystem;
+pub mod objc;
 pub mod registry;
 pub mod sync;
 
+pub use arc::{RefCounted, ReleaseOutcome};
+pub use objc::{objc_msg_send, Class, DoesNotRespond, Imp, Object, Sel};
 pub use registry::{Registry, ResolveReport};
 pub use sync::FutexMutex;

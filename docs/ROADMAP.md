@@ -75,11 +75,34 @@ via the syscall shim.
 
 ## Phase 3 — Objective-C runtime & minimal libSystem
 
-- [ ] Object layout, `objc_msgSend`, class/method/ivar tables.
-- [ ] ARC-compatible reference counting.
-- [ ] `libSystem` subset over bionic.
+- [x] Object layout, class/method/ivar tables, and `objc_msgSend`'s
+      dispatch *logic* (`runtime-shim::objc`): superclass-chain method
+      lookup, override shadowing, `-isKindOfClass:`-style checks, ivar
+      offset accumulation across inheritance, and — easy to get wrong —
+      Objective-C's "sending a message to `nil` is a legal no-op"
+      semantics. 7 unit tests. **Not done**: the real ARM64
+      `objc_msgSend` calling-convention trampoline (receiver in `x0`,
+      selector in `x1`, tail-call into the resolved `Imp`) — needs real
+      ARM64 execution to verify, same caveat as `syscall-shim::ptrace`.
+      Also not done: parsing actual classes out of a Mach-O's
+      `__objc_classlist`/`__objc_methname` sections — real, well-documented
+      format, just not implemented yet.
+- [x] ARC-compatible reference counting (`runtime-shim::arc::RefCounted`):
+      retain/release/dealloc-signal, with over-release reported instead of
+      silently corrupting memory the way real ARC's undefined behavior
+      would. Verified single-threaded and with 8 real concurrent threads.
+- [x] `libSystem` subset over bionic (`runtime-shim::libsystem`) — a
+      deliberately small one: `_malloc`/`_free`/`_memcpy`/`_strlen` shims
+      registered into `Registry` under their Darwin symbol names, tested
+      by actually calling through the registered function-pointer
+      addresses (proves they're real working trampolines to bionic, not
+      placeholders). The other few hundred libSystem symbols a typical
+      binary imports are not covered — grown incrementally as real test
+      binaries demand them, not speculatively.
 - [ ] Success criterion: a binary with basic Objective-C classes (no UIKit)
-      runs and produces correct output.
+      runs and produces correct output. **Not yet met** — blocked on the
+      ARM64 `objc_msgSend` trampoline and the still-open Phase 1 live
+      process/ptrace verification above.
 
 ## Phase 4 — Metal → Vulkan translation
 
