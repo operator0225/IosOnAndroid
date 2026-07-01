@@ -1,0 +1,39 @@
+# Build outputs
+build/
+out/
+target/
+*.o
+*.a
+*.so
+*.dylib
+
+# Android / Gradle
+.gradle/
+.cxx/
+local.properties
+*.apk
+*.aab
+captures/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Rust
+Cargo.lock
+!/Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+
+# Never commit Apple-derived binaries/firmware (see docs/LEGAL.md)
+*.ipsw
+*.ipa
+*.dmg
+dyld_shared_cache*
