@@ -5,19 +5,35 @@
 //! are used or needed (see `../docs/LEGAL.md`).
 
 use crate::format::{
-    CPU_TYPE_ARM64, LC_MAIN, LC_SEGMENT_64, LC_UNIXTHREAD, MH_EXECUTE, MH_MAGIC_64,
+    CPU_TYPE_ARM64, LC_LOAD_DYLIB, LC_MAIN, LC_SEGMENT_64, LC_SYMTAB, LC_UNIXTHREAD, MH_EXECUTE,
+    MH_MAGIC_64,
 };
-use crate::{parse, Entry, LoadError};
+use crate::{parse, Entry, Export, Import, LoadError};
 
 const CPU_TYPE_X86_64: u32 = 0x0100_0007;
 const MH_DYLIB: u32 = 0x6;
 const ARM_THREAD_STATE64: u32 = 6;
+const LC_DYSYMTAB: u32 = 0xb;
+
+// nlist_64.n_type bits, for building test symbol tables.
+const N_EXT: u8 = 0x01;
+const N_UNDF: u8 = 0x00;
+const N_SECT: u8 = 0x0e;
+const N_STAB_MARKER: u8 = 0x20; // any bit within the 0xe0 N_STAB mask
+
+struct SymtabPatch {
+    /// Byte offset of the `symoff` field, relative to the start of `cmds`.
+    symoff_field: usize,
+    nlist_bytes: Vec<u8>,
+    strtab_bytes: Vec<u8>,
+}
 
 struct Builder {
     cmds: Vec<u8>,
     ncmds: u32,
     cputype: u32,
     filetype: u32,
+    symtab_patch: Option<SymtabPatch>,
 }
 
 impl Builder {
@@ -27,6 +43,7 @@ impl Builder {
             ncmds: 0,
             cputype: CPU_TYPE_ARM64,
             filetype: MH_EXECUTE,
+            symtab_patch: None,
         }
     }
 
@@ -98,6 +115,64 @@ impl Builder {
         self
     }
 
+    fn dylib(mut self, name: &str) -> Self {
+        let mut payload = Vec::new();
+        payload.extend(24u32.to_le_bytes()); // name offset, relative to cmd_start
+        payload.extend(0u32.to_le_bytes()); // timestamp
+        payload.extend(0u32.to_le_bytes()); // current_version
+        payload.extend(0u32.to_le_bytes()); // compatibility_version
+        payload.extend(name.as_bytes());
+        payload.push(0);
+        while payload.len() % 8 != 0 {
+            payload.push(0); // pad like a real dylib_command would
+        }
+
+        let mut cmd = Vec::new();
+        cmd.extend(LC_LOAD_DYLIB.to_le_bytes());
+        cmd.extend(((8 + payload.len()) as u32).to_le_bytes());
+        cmd.extend(payload);
+        self.cmds.extend(cmd);
+        self.ncmds += 1;
+        self
+    }
+
+    /// Each entry is `(name, n_type, n_value)`; string-table/nlist bytes
+    /// are staged and only finalized (with real file offsets) in `build()`,
+    /// since `LC_SYMTAB` points at a symbol table that lives *after* all
+    /// load commands.
+    fn symtab(mut self, syms: &[(&str, u8, u64)]) -> Self {
+        let symoff_field = self.cmds.len() + 8; // past this cmd's cmd/cmdsize
+        let mut cmd = Vec::new();
+        cmd.extend(LC_SYMTAB.to_le_bytes());
+        cmd.extend(24u32.to_le_bytes());
+        cmd.extend(0u32.to_le_bytes()); // symoff, patched in build()
+        cmd.extend((syms.len() as u32).to_le_bytes());
+        cmd.extend(0u32.to_le_bytes()); // stroff, patched in build()
+        cmd.extend(0u32.to_le_bytes()); // strsize, patched in build()
+        self.cmds.extend(cmd);
+        self.ncmds += 1;
+
+        let mut strtab = vec![0u8]; // conventional leading NUL
+        let mut nlist_bytes = Vec::new();
+        for (name, n_type, n_value) in syms {
+            let n_strx = strtab.len() as u32;
+            strtab.extend(name.as_bytes());
+            strtab.push(0);
+            nlist_bytes.extend(n_strx.to_le_bytes());
+            nlist_bytes.push(*n_type);
+            nlist_bytes.push(0u8); // n_sect
+            nlist_bytes.extend(0u16.to_le_bytes()); // n_desc
+            nlist_bytes.extend(n_value.to_le_bytes());
+        }
+
+        self.symtab_patch = Some(SymtabPatch {
+            symoff_field,
+            nlist_bytes,
+            strtab_bytes: strtab,
+        });
+        self
+    }
+
     fn raw_cmd(mut self, cmd: u32, extra_payload_len: usize) -> Self {
         let cmdsize = 8 + extra_payload_len as u32;
         let mut c = Vec::new();
@@ -110,6 +185,7 @@ impl Builder {
     }
 
     fn build(self) -> Vec<u8> {
+        const HEADER_LEN: usize = 32;
         let mut out = Vec::new();
         out.extend(MH_MAGIC_64.to_le_bytes());
         out.extend(self.cputype.to_le_bytes());
@@ -120,6 +196,21 @@ impl Builder {
         out.extend(0u32.to_le_bytes()); // flags
         out.extend(0u32.to_le_bytes()); // reserved
         out.extend(self.cmds);
+
+        if let Some(patch) = self.symtab_patch {
+            let symoff = out.len() as u32;
+            let stroff = symoff + patch.nlist_bytes.len() as u32;
+            let strsize = patch.strtab_bytes.len() as u32;
+
+            let field_pos = HEADER_LEN + patch.symoff_field;
+            out[field_pos..field_pos + 4].copy_from_slice(&symoff.to_le_bytes());
+            out[field_pos + 8..field_pos + 12].copy_from_slice(&stroff.to_le_bytes());
+            out[field_pos + 12..field_pos + 16].copy_from_slice(&strsize.to_le_bytes());
+
+            out.extend(patch.nlist_bytes);
+            out.extend(patch.strtab_bytes);
+        }
+
         out
     }
 }
@@ -238,11 +329,11 @@ fn rejects_ambiguous_dual_entry_point() {
 
 #[test]
 fn unknown_load_commands_are_skipped() {
-    // e.g. a stand-in for LC_LOAD_DYLIB, whose contents we don't interpret
-    // in Phase 1 (see docs/ROADMAP.md Phase 2) but must skip correctly.
-    const LC_LOAD_DYLIB_STANDIN: u32 = 0xC; // arbitrary unhandled cmd value
+    // LC_DYSYMTAB: a real command we deliberately don't interpret yet
+    // (see docs/ROADMAP.md Phase 2) but must still skip correctly via its
+    // own cmdsize.
     let bytes = Builder::new()
-        .raw_cmd(LC_LOAD_DYLIB_STANDIN, 40)
+        .raw_cmd(LC_DYSYMTAB, 72)
         .segment("__TEXT", 0x1_0000, 0x4000, 0x5)
         .lc_main(0x10, 0)
         .build();
@@ -256,4 +347,85 @@ fn entry_vmaddr_without_text_segment_errors() {
     let bytes = Builder::new().lc_main(0x10, 0).build();
     let image = parse(&bytes).expect("should parse");
     assert_eq!(image.entry_vmaddr(), Err(LoadError::MissingTextSegment));
+}
+
+#[test]
+fn parses_load_dylib_names() {
+    let bytes = Builder::new()
+        .dylib("/usr/lib/libSystem.B.dylib")
+        .dylib("/System/Library/Frameworks/Foundation.framework/Foundation")
+        .lc_main(0, 0)
+        .build();
+    let image = parse(&bytes).expect("should parse");
+    assert_eq!(
+        image.dylibs,
+        vec![
+            "/usr/lib/libSystem.B.dylib".to_string(),
+            "/System/Library/Frameworks/Foundation.framework/Foundation".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn parses_symtab_into_imports_and_exports() {
+    let bytes = Builder::new()
+        .symtab(&[
+            ("_printf", N_UNDF | N_EXT, 0),      // imported (undefined external)
+            ("_main", N_SECT | N_EXT, 0x1_0080), // exported (defined external)
+        ])
+        .lc_main(0x80, 0)
+        .build();
+    let image = parse(&bytes).expect("should parse");
+
+    assert_eq!(
+        image.imports,
+        vec![Import {
+            name: "_printf".to_string()
+        }]
+    );
+    assert_eq!(
+        image.exports,
+        vec![Export {
+            name: "_main".to_string(),
+            value: 0x1_0080,
+        }]
+    );
+}
+
+#[test]
+fn symtab_skips_local_and_debug_symbols() {
+    let bytes = Builder::new()
+        .symtab(&[
+            ("_local_helper", N_SECT, 0x1_0000), // no N_EXT: local, not an import/export
+            ("some_stab_entry", N_STAB_MARKER, 0), // debug symbol, not a real symbol
+            ("_imported", N_UNDF | N_EXT, 0),
+        ])
+        .lc_main(0, 0)
+        .build();
+    let image = parse(&bytes).expect("should parse");
+    assert_eq!(
+        image.imports,
+        vec![Import {
+            name: "_imported".to_string()
+        }]
+    );
+    assert!(image.exports.is_empty());
+}
+
+#[test]
+fn no_symtab_command_yields_empty_import_export_lists() {
+    let bytes = Builder::new().lc_main(0, 0).build();
+    let image = parse(&bytes).expect("should parse");
+    assert!(image.imports.is_empty());
+    assert!(image.exports.is_empty());
+}
+
+#[test]
+fn rejects_duplicate_symtab() {
+    let bytes = Builder::new()
+        .symtab(&[("_a", N_UNDF | N_EXT, 0)])
+        .symtab(&[("_b", N_UNDF | N_EXT, 0)])
+        .lc_main(0, 0)
+        .build();
+    assert_eq!(parse(&bytes), Err(LoadError::DuplicateSymtab));
 }

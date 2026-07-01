@@ -28,6 +28,15 @@ impl<'a> Cursor<'a> {
         Ok(slice)
     }
 
+    pub fn u8(&mut self) -> Result<u8, OutOfBounds> {
+        Ok(self.take(1)?[0])
+    }
+
+    pub fn u16(&mut self) -> Result<u16, OutOfBounds> {
+        let b = self.take(2)?;
+        Ok(u16::from_le_bytes([b[0], b[1]]))
+    }
+
     pub fn u32(&mut self) -> Result<u32, OutOfBounds> {
         let b = self.take(4)?;
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -50,5 +59,17 @@ impl<'a> Cursor<'a> {
         }
         self.pos = pos;
         Ok(())
+    }
+
+    /// Reads a NUL-terminated byte string starting at `start`, without
+    /// disturbing this cursor's own position. Errors (rather than reading
+    /// past `limit`/end-of-buffer) if no NUL terminator is found in range.
+    pub fn cstr_bytes_at(&self, start: usize, limit: usize) -> Result<&'a [u8], OutOfBounds> {
+        if start > limit || limit > self.bytes.len() {
+            return Err(OutOfBounds);
+        }
+        let window = &self.bytes[start..limit];
+        let nul = window.iter().position(|&b| b == 0).ok_or(OutOfBounds)?;
+        Ok(&window[..nul])
     }
 }

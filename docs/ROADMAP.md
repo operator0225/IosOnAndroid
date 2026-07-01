@@ -45,12 +45,33 @@ via the syscall shim.
 
 ## Phase 2 — Dynamic linking & threading
 
-- [ ] dyld-compatible symbol resolution against our own shim libraries.
-- [ ] pthread/futex-backed threading primitives satisfying Darwin's thread
-      API surface.
+- [x] Mach-O symbol table parsing (`loader`): classic `nlist_64`
+      `LC_SYMTAB` → import/export lists, plus `LC_LOAD_DYLIB` dependency
+      names. 17 unit tests. Not yet understood: `LC_DYLD_CHAINED_FIXUPS`,
+      the newer binding scheme most real modern iOS binaries use instead
+      of (or alongside) classic relocations — needed before this handles
+      real-world binaries, not just hand-built fixtures.
+- [x] dyld-compatible symbol resolution against our own shim libraries
+      (`runtime-shim::registry`): resolves an image's imports against a
+      registry of shim symbol addresses, honestly reporting anything
+      unresolved rather than guessing. Pure/host-testable, 4 unit tests.
+      Not yet wired to anything: there's no live process to bind resolved
+      addresses *into* yet (needs the Phase 1 mapping step) and no actual
+      shim symbols registered (needs Phase 3's libSystem subset).
+- [x] A futex-backed mutex (`runtime-shim::sync::FutexMutex`) — one piece
+      of the threading-primitive surface, standing in for what Darwin's
+      `os_unfair_lock`/`pthread_mutex_t` need once nothing has XNU under
+      it. Fully arch-independent, verified with real concurrent threads on
+      host (unlike the ptrace loop, this needed no aarch64 hardware to
+      test). Not yet done: condition variables, semaphores, and — the
+      bigger piece — actually creating Darwin threads at all (`bsdthread_create`
+      is unusually kernel-assisted on Darwin, unlike Linux's `clone`-based
+      pthreads; translating it is its own chunk of work).
 - [ ] Mach IPC primitives (ports, messages) reimplemented in userspace.
 - [ ] Success criterion: a multi-threaded binary using dynamic libraries
-      (still no UIKit/Foundation) runs correctly.
+      (still no UIKit/Foundation) runs correctly. **Not yet met** — needs
+      the above thread-creation path plus Phase 1's still-open live-process
+      mapping/ptrace verification.
 
 ## Phase 3 — Objective-C runtime & minimal libSystem
 

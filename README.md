@@ -48,17 +48,22 @@ A layered translation stack:
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design and
 [docs/ROADMAP.md](docs/ROADMAP.md) for the phased build plan. Status:
-**Phase 1 — Mach-O loader + "hello syscall"**. The Mach-O parser and the
-Darwin→Linux syscall translation logic are implemented and unit tested
-(`cargo test --workspace`); the aarch64 ptrace interception loop builds
-for `aarch64-linux-android` but is not yet verified on real hardware (see
-[docs/ROADMAP.md](docs/ROADMAP.md) Phase 1).
+**Phase 2 — dynamic linking & threading**, with Phase 1 mostly but not
+fully done. Implemented and unit tested (`cargo test --workspace`, 34
+tests): the Mach-O parser (segments, entry point, symbol table, dylib
+names), Darwin→Linux syscall translation, dyld-style symbol resolution
+against a shim registry, and a futex-backed mutex. **Not yet verified on
+real hardware**: the aarch64 ptrace guest-interception loop builds clean
+for `aarch64-linux-android` but this development environment is x86_64
+with no ARM64 execution available — see
+[docs/ROADMAP.md](docs/ROADMAP.md) for the honest per-item status.
 
 ## Building
 
-Rust workspace; `loader` and `syscall-shim` are plain library crates,
-`tools/mkfixture` is a small CLI. Requires the `aarch64-linux-android`
-rustup target to cross-check against the real target:
+Rust workspace; `loader`, `syscall-shim`, and `runtime-shim` are plain
+library crates, `tools/mkfixture` is a small CLI. Requires the
+`aarch64-linux-android` rustup target to cross-check against the real
+target:
 
 ```
 cargo test --workspace                              # host tests

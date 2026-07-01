@@ -17,8 +17,8 @@ mod format;
 mod parse;
 
 pub use format::{
-    Entry, Prot, Segment, CPU_TYPE_ARM64, MH_EXECUTE, MH_MAGIC_64, VM_PROT_EXECUTE, VM_PROT_READ,
-    VM_PROT_WRITE,
+    Entry, Export, Import, Prot, Segment, CPU_TYPE_ARM64, MH_EXECUTE, MH_MAGIC_64, VM_PROT_EXECUTE,
+    VM_PROT_READ, VM_PROT_WRITE,
 };
 pub use parse::{parse, LoadError, MachOImage};
 

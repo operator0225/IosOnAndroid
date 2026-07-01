@@ -1,17 +1,27 @@
 use crate::cursor::{Cursor, OutOfBounds};
 use crate::format::{
-    Entry, Prot, Segment, ARM_THREAD_STATE64, CPU_TYPE_ARM64, LC_MAIN, LC_SEGMENT_64,
-    LC_UNIXTHREAD, MH_EXECUTE, MH_MAGIC_64,
+    Entry, Export, Import, Prot, Segment, ARM_THREAD_STATE64, CPU_TYPE_ARM64, LC_LOAD_DYLIB,
+    LC_MAIN, LC_SEGMENT_64, LC_SYMTAB, LC_UNIXTHREAD, MH_EXECUTE, MH_MAGIC_64, N_EXT, N_STAB,
+    N_TYPE, N_UNDF,
 };
 
 /// A successfully parsed Mach-O64 image: everything a loader needs to know
-/// to map segments and pick a start address, nothing else.
+/// to map segments, pick a start address, and (from Phase 2 on) resolve
+/// symbols against `runtime-shim`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachOImage {
     pub cputype: u32,
     pub filetype: u32,
     pub segments: Vec<Segment>,
     pub entry: Entry,
+    /// Names from this image's `LC_LOAD_DYLIB` commands, in file order.
+    /// Not resolved to anything yet — see `runtime-shim`.
+    pub dylibs: Vec<String>,
+    /// Undefined external symbols this image needs bound before it can
+    /// run correctly.
+    pub imports: Vec<Import>,
+    /// Defined external symbols this image makes available to others.
+    pub exports: Vec<Export>,
 }
 
 impl MachOImage {
@@ -41,6 +51,7 @@ pub enum LoadError {
     BadCmdSize { cmd: u32, cmdsize: u32 },
     BadSegname,
     DuplicateEntryPoint,
+    DuplicateSymtab,
     MissingEntryPoint,
     MissingTextSegment,
     UnsupportedThreadFlavor(u32),
@@ -55,11 +66,12 @@ impl From<OutOfBounds> for LoadError {
 
 /// Parse a Mach-O64 ARM64 executable from `bytes`.
 ///
-/// Only understands what Phase 1 needs: the header, `LC_SEGMENT_64`,
-/// `LC_MAIN`, and `LC_UNIXTHREAD` (ARM64 flavor). Anything else
-/// (`LC_LOAD_DYLIB`, symbol tables, code signatures, ...) is skipped via
-/// each load command's own `cmdsize`, not interpreted — resolving those is
-/// later-phase work (see `../docs/ROADMAP.md`).
+/// Understands the header, `LC_SEGMENT_64`, `LC_MAIN`, `LC_UNIXTHREAD`
+/// (ARM64 flavor), `LC_SYMTAB` (classic `nlist_64` symbol table — the
+/// newer `LC_DYLD_CHAINED_FIXUPS` scheme most modern iOS binaries also
+/// carry is not yet understood, see `../docs/ROADMAP.md` Phase 2), and
+/// `LC_LOAD_DYLIB`. Anything else (code signatures, `LC_DYSYMTAB`'s extra
+/// indices, ...) is skipped via each load command's own `cmdsize`.
 pub fn parse(bytes: &[u8]) -> Result<MachOImage, LoadError> {
     let mut c = Cursor::new(bytes);
 
@@ -91,6 +103,8 @@ pub fn parse(bytes: &[u8]) -> Result<MachOImage, LoadError> {
 
     let mut segments = Vec::new();
     let mut entry: Option<Entry> = None;
+    let mut dylibs = Vec::new();
+    let mut symtab: Option<(u32, u32, u32, u32)> = None; // (symoff, nsyms, stroff, strsize)
 
     for _ in 0..ncmds {
         let cmd_start = c.pos();
@@ -121,17 +135,40 @@ pub fn parse(bytes: &[u8]) -> Result<MachOImage, LoadError> {
                     set_entry(&mut entry, Entry::AbsolutePc(pc))?;
                 }
             }
+            LC_SYMTAB => {
+                if symtab.is_some() {
+                    return Err(LoadError::DuplicateSymtab);
+                }
+                let symoff = c.u32()?;
+                let nsyms = c.u32()?;
+                let stroff = c.u32()?;
+                let strsize = c.u32()?;
+                symtab = Some((symoff, nsyms, stroff, strsize));
+            }
+            LC_LOAD_DYLIB => {
+                dylibs.push(parse_dylib_name(&c, cmd_start, next_cmd)?);
+            }
             _ => {}
         }
 
         c.seek(next_cmd)?;
     }
 
+    let (imports, exports) = match symtab {
+        Some((symoff, nsyms, stroff, strsize)) => {
+            parse_symtab(bytes, symoff, nsyms, stroff, strsize)?
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+
     Ok(MachOImage {
         cputype,
         filetype,
         segments,
         entry: entry.ok_or(LoadError::MissingEntryPoint)?,
+        dylibs,
+        imports,
+        exports,
     })
 }
 
@@ -212,4 +249,87 @@ fn parse_unixthread(
     let pc = c.u64()?;
     c.seek(save)?;
     Ok(Some(pc))
+}
+
+/// `LC_LOAD_DYLIB`'s `dylib_command`: after `cmd`/`cmdsize`, a `union
+/// lc_str name` (a `u32` byte offset *from `cmd_start`*) followed by
+/// `timestamp`/`current_version`/`compatibility_version` (each `u32`),
+/// then the NUL-terminated name string itself at `cmd_start + name_offset`.
+fn parse_dylib_name(c: &Cursor, cmd_start: usize, next_cmd: usize) -> Result<String, LoadError> {
+    let mut c = *c;
+    let name_offset = c.u32()? as usize;
+    let _timestamp = c.u32()?;
+    let _current_version = c.u32()?;
+    let _compat_version = c.u32()?;
+
+    let name_start = cmd_start
+        .checked_add(name_offset)
+        .ok_or(LoadError::Malformed)?;
+    let name_bytes = c.cstr_bytes_at(name_start, next_cmd)?;
+    std::str::from_utf8(name_bytes)
+        .map(str::to_string)
+        .map_err(|_| LoadError::Malformed)
+}
+
+/// Reads the classic `nlist_64` symbol table at absolute file offsets
+/// `symoff`/`stroff`, splitting entries into imports (undefined external
+/// symbols) and exports (defined external, non-debug symbols) by their
+/// `n_type` bits — see `format::{N_TYPE, N_EXT, N_STAB, N_UNDF}`.
+fn parse_symtab(
+    bytes: &[u8],
+    symoff: u32,
+    nsyms: u32,
+    stroff: u32,
+    strsize: u32,
+) -> Result<(Vec<Import>, Vec<Export>), LoadError> {
+    let str_start = stroff as usize;
+    let str_end = str_start
+        .checked_add(strsize as usize)
+        .ok_or(LoadError::Malformed)?;
+    if str_end > bytes.len() {
+        return Err(LoadError::Truncated);
+    }
+
+    let mut c = Cursor::new(bytes);
+    c.seek(symoff as usize)?;
+
+    let mut imports = Vec::new();
+    let mut exports = Vec::new();
+
+    for _ in 0..nsyms {
+        let n_strx = c.u32()?;
+        let n_type = c.u8()?;
+        let _n_sect = c.u8()?;
+        let _n_desc = c.u16()?;
+        let n_value = c.u64()?;
+
+        if n_type & N_STAB != 0 {
+            continue; // debug symbol table entry, not a real symbol
+        }
+        if n_type & N_EXT == 0 {
+            continue; // private/local symbol, nothing external depends on it
+        }
+
+        let name_start = str_start
+            .checked_add(n_strx as usize)
+            .ok_or(LoadError::Malformed)?;
+        let name_bytes = c.cstr_bytes_at(name_start, str_end)?;
+        let name = std::str::from_utf8(name_bytes)
+            .map_err(|_| LoadError::Malformed)?
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+
+        if n_type & N_TYPE == N_UNDF {
+            imports.push(Import { name });
+        } else {
+            exports.push(Export {
+                name,
+                value: n_value,
+            });
+        }
+    }
+
+    Ok((imports, exports))
 }

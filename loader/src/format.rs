@@ -19,9 +19,34 @@ pub(crate) const LC_REQ_DYLD: u32 = 0x8000_0000;
 pub(crate) const LC_SEGMENT_64: u32 = 0x19;
 pub(crate) const LC_UNIXTHREAD: u32 = 0x5;
 pub(crate) const LC_MAIN: u32 = 0x28 | LC_REQ_DYLD;
+pub(crate) const LC_SYMTAB: u32 = 0x2;
+pub(crate) const LC_LOAD_DYLIB: u32 = 0xc;
 
 /// Thread-state flavor for `LC_UNIXTHREAD` on ARM64 (`ARM_THREAD_STATE64`).
 pub(crate) const ARM_THREAD_STATE64: u32 = 6;
+
+/// `nlist_64.n_type` mask selecting the N_STAB/N_PEXT/N_TYPE/N_EXT bits.
+pub(crate) const N_STAB: u8 = 0xe0;
+pub(crate) const N_TYPE: u8 = 0x0e;
+pub(crate) const N_EXT: u8 = 0x01;
+/// `N_TYPE` value meaning "undefined" (needs to be bound to a definition
+/// elsewhere) rather than defined in one of this image's own sections.
+pub(crate) const N_UNDF: u8 = 0x00;
+
+/// A symbol this image requires but does not define — what
+/// `runtime-shim`'s resolver must bind against a shim implementation (or
+/// eventually a real dependency) before the image can run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Import {
+    pub name: String,
+}
+
+/// A symbol this image defines and exposes to importers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Export {
+    pub name: String,
+    pub value: u64,
+}
 
 /// `vm_prot_t` bit for read access.
 pub const VM_PROT_READ: u32 = 0x1;
