@@ -47,8 +47,23 @@ A layered translation stack:
    input/lifecycle events.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design and
-[docs/ROADMAP.md](docs/ROADMAP.md) for the phased build plan. Status: **Phase
-0 — architecture & scaffolding**, no runtime code yet.
+[docs/ROADMAP.md](docs/ROADMAP.md) for the phased build plan. Status:
+**Phase 1 — Mach-O loader + "hello syscall"**. The Mach-O parser and the
+Darwin→Linux syscall translation logic are implemented and unit tested
+(`cargo test --workspace`); the aarch64 ptrace interception loop builds
+for `aarch64-linux-android` but is not yet verified on real hardware (see
+[docs/ROADMAP.md](docs/ROADMAP.md) Phase 1).
+
+## Building
+
+Rust workspace; `loader` and `syscall-shim` are plain library crates,
+`tools/mkfixture` is a small CLI. Requires the `aarch64-linux-android`
+rustup target to cross-check against the real target:
+
+```
+cargo test --workspace                              # host tests
+cargo check --workspace --target aarch64-linux-android  # target type-check
+```
 
 ## Non-goals
 

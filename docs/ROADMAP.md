@@ -24,12 +24,24 @@ Goal: load a statically-linked, no-framework-dependency ARM64 Mach-O binary
 and get it to execute a handful of raw syscalls (write to stdout, exit)
 via the syscall shim.
 
-- [ ] Mach-O header/load-command/segment parser.
-- [ ] Segment mapping with correct page protections.
-- [ ] Darwin syscall trap table for a minimal syscall subset
-      (`write`, `exit`, `mmap`, `mprotect`).
+- [x] Mach-O header/load-command parser (`loader/`): `LC_SEGMENT_64`,
+      `LC_MAIN`, `LC_UNIXTHREAD` (classic ARM64 thread state). Bounds-checked
+      against malformed/truncated/hostile input, 12 unit tests.
+- [x] Darwin → Linux syscall translation table (`syscall-shim/translate.rs`)
+      for `exit`, `write`, `mmap` (with correct `MAP_ANON`/flag-bit
+      translation — Darwin's and Linux's bit values differ), `mprotect`.
+      Pure/host-testable, 9 unit tests, no ptrace or ARM64 execution needed.
+- [x] `tools/mkfixture`: a minimal hand-assembled (via `llvm-mc`, not
+      Apple's toolchain) ARM64 Mach-O executable, round-trip tested against
+      the loader.
+- [ ] Segment *mapping into a live process* + the aarch64 ptrace
+      syscall-interception loop (`syscall-shim/ptrace.rs`) exist as code,
+      cross-compile clean for `aarch64-linux-android`, but are **unverified
+      on real hardware** — this development environment is x86_64 with no
+      aarch64 emulator available. Needs testing on an actual ARM64 device
+      (e.g. the S25+) or aarch64 CI runner before this box can be checked.
 - [ ] Success criterion: a trivial iOS-compiled binary prints to logcat and
-      exits cleanly on-device.
+      exits cleanly on-device. **Not yet met** — blocked on the item above.
 
 ## Phase 2 — Dynamic linking & threading
 

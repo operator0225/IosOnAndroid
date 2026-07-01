@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "loader",
+    "syscall-shim",
+    "tools/mkfixture",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
