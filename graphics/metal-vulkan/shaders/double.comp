@@ -1,0 +1,20 @@
+// Source for the SPIR-V words embedded in ../src/shaders.rs.
+//
+// Original, hand-written test shader (doubles each element of a storage
+// buffer) — not derived from any Apple/Metal shader source. Written in
+// GLSL rather than MSL because this crate consumes SPIR-V (what a real
+// MSL-to-SPIR-V translation pass would eventually produce) and doesn't
+// implement MSL compilation itself yet — see ../../../docs/ROADMAP.md
+// Phase 4.
+//
+// Regenerate with:
+//   glslangValidator -V double.comp -o double.spv
+//   spirv-val double.spv   # confirms it's well-formed SPIR-V
+//   spirv-dis double.spv   # human-readable disassembly, for review
+#version 450
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Buf { uint data[]; };
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    data[i] = data[i] * 2u;
+}

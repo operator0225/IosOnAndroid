@@ -4,6 +4,7 @@ members = [
     "loader",
     "syscall-shim",
     "runtime-shim",
+    "graphics/metal-vulkan",
     "tools/mkfixture",
 ]
 

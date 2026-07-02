@@ -106,12 +106,39 @@ via the syscall shim.
 
 ## Phase 4 — Metal → Vulkan translation
 
-- [ ] Core object mapping (`MTLDevice`, `MTLCommandQueue`, buffers,
-      textures, pipeline states).
-- [ ] MSL → SPIR-V via SPIRV-Cross integration.
-- [ ] Synchronization primitive mapping.
+- [x] Core object mapping, compute path only (`graphics/metal-vulkan`):
+      `MetalDevice`/`MetalBuffer`/`MetalComputePipeline` backed by real
+      `ash`/Vulkan objects — device/queue selection, buffer allocation
+      with storage-mode-driven memory-type selection, compute pipeline +
+      descriptor set creation, dispatch. **This phase's code is verified
+      against a real (if software) Vulkan device**, not just type-checked
+      — `end_to_end_tests.rs` allocates a buffer, dispatches a real
+      compute shader against it via SwiftShader (or any
+      `VK_ICD_FILENAMES`-registered implementation), and checks the GPU's
+      own output. That's a materially different (stronger) verification
+      than the ARM64-execution-shaped pieces in earlier phases get, since
+      a software Vulkan implementation runs fine on an x86_64 host — see
+      `graphics/metal-vulkan/README.md` for how to run it. Tests skip
+      themselves cleanly (don't fail the suite) when no Vulkan device is
+      configured at all.
+      Render pipelines, textures, and samplers are **not covered** — compute
+      only so far.
+- [ ] MSL → SPIR-V via SPIRV-Cross integration. **Not done**: this crate
+      currently *consumes* SPIR-V (compiled from hand-written GLSL via
+      `glslangValidator`, itself a stand-in for what MSL source would
+      compile to); it does not translate Metal Shading Language itself.
+      SPIRV-Cross does support MSL as an input dialect and is the right
+      dependency for this — just not wired up yet.
+- [ ] Synchronization primitive mapping beyond the coarse
+      `queue_wait_idle`-per-dispatch this phase uses (real Metal
+      fences/events/heaps → Vulkan semaphores/fences/memory heaps, for
+      actual pipelining instead of blocking after every dispatch).
 - [ ] Success criterion: a standalone Metal compute/render sample (no
-      UIKit) renders correctly to an Android `Surface`.
+      UIKit) renders correctly to an Android `Surface`. **Partially met**
+      for the compute half in this dev environment (real Vulkan compute
+      dispatch verified); rendering to an actual Android `Surface`, and
+      running on real device Vulkan (Adreno on the S25+, not SwiftShader),
+      are both still open.
 
 ## Phase 5 — Foundation subset
 
